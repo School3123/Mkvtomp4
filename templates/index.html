@@ -8,14 +8,48 @@
     <style>
         .card { margin-bottom: 20px; }
         .status-box { padding: 10px; background-color: #f8f9fa; border-radius: 5px; margin-top: 10px; }
+        select option { font-family: monospace; }
+        /* システム情報の文字サイズ調整 */
+        .sys-text { font-size: 0.9em; }
     </style>
 </head>
 <body class="bg-light">
 
-<div class="container py-5">
+<div class="container py-4">
     <h1 class="mb-4 text-center">Magnet Downloader & Converter</h1>
 
-    <!-- 1. Magnet Download Section -->
+    <!-- 0. System Resources (NEW) -->
+    <div class="card shadow-sm border-info">
+        <div class="card-header bg-info text-dark d-flex justify-content-between align-items-center">
+            <strong>🖥 System Resources</strong>
+            <span class="badge bg-light text-dark" id="cpu-name">Checking...</span>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <!-- CPU -->
+                <div class="col-md-6 mb-3">
+                    <label class="fw-bold sys-text">CPU Usage <span id="cpu-val" class="float-end">- %</span></label>
+                    <div class="progress" style="height: 20px;">
+                        <div id="cpu-bar" class="progress-bar bg-info" role="progressbar" style="width: 0%"></div>
+                    </div>
+                </div>
+                <!-- RAM -->
+                <div class="col-md-6 mb-3">
+                    <label class="fw-bold sys-text">Memory <span id="mem-val" class="float-end">- / - GB</span></label>
+                    <div class="progress" style="height: 20px;">
+                        <div id="mem-bar" class="progress-bar bg-warning" role="progressbar" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- GPU Area (動的に追加) -->
+            <div id="gpu-container">
+                <!-- GPUがある場合ここに表示される -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 1. Magnet Download -->
     <div class="card shadow-sm">
         <div class="card-header bg-primary text-white">1. Magnet ダウンロード</div>
         <div class="card-body">
@@ -23,10 +57,9 @@
                 <input type="text" id="magnetLink" class="form-control" placeholder="magnet:?xt=urn:btih:...">
                 <button class="btn btn-primary" onclick="startDownload()">ダウンロード開始</button>
             </div>
-            
             <div id="torrentStatus" class="status-box">
                 <strong>Status:</strong> <span id="t-status">Idle</span><br>
-                <strong>Name:</strong> <span id="t-name">-</span><br>
+                <strong>Name:</strong> <span id="t-name">-</span>
                 <div class="progress mt-2">
                     <div id="t-progress-bar" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
                 </div>
@@ -36,12 +69,12 @@
 
     <!-- 2. Convert Section -->
     <div class="card shadow-sm">
-        <div class="card-header bg-success text-white">2. MP4変換 (H.264)</div>
+        <div class="card-header bg-success text-white">2. MP4変換</div>
         <div class="card-body">
             <form id="convertForm">
                 <div class="mb-3">
-                    <label class="form-label">ファイル選択 (downloadsフォルダ内)</label>
-                    <select class="form-select" id="fileSelect">
+                    <label class="form-label">ファイル選択</label>
+                    <select class="form-select" id="fileSelect" size="5">
                         {% for file in files %}
                             <option value="{{ file }}">{{ file }}</option>
                         {% else %}
@@ -49,115 +82,131 @@
                         {% endfor %}
                     </select>
                 </div>
-
                 <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <label class="form-label">プリセット (速度 vs 圧縮率)</label>
-                        <select class="form-select" id="presetSelect">
-                            <option value="ultrafast">Ultrafast (最速・画質低)</option>
-                            <option value="superfast">Superfast</option>
-                            <option value="veryfast">Veryfast</option>
-                            <option value="faster">Faster</option>
-                            <option value="fast">Fast</option>
-                            <option value="medium" selected>Medium (標準)</option>
-                            <option value="slow">Slow</option>
-                            <option value="slower">Slower</option>
-                            <option value="veryslow">Veryslow (最遅・高圧縮)</option>
+                    <div class="col-md-12 mb-3">
+                        <label class="form-label fw-bold">エンコーダー</label>
+                        <select class="form-select border-success" id="encoderSelect">
+                            <option value="libx264" selected>CPU (x264)</option>
+                            <option value="h264_nvenc">GPU (NVIDIA NVENC)</option>
+                            <option value="h264_qsv">GPU (Intel QSV)</option>
                         </select>
                     </div>
                     <div class="col-md-6 mb-3">
-                        <label class="form-label">画質 (CRF: 18-28 推奨)</label>
-                        <input type="number" class="form-control" id="crfValue" value="23" min="0" max="51">
+                        <label class="form-label">プリセット</label>
+                        <select class="form-select" id="presetSelect">
+                            <option value="ultrafast">Ultrafast</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="veryslow">Veryslow</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">画質 (CRF: 18-28)</label>
+                        <input type="number" class="form-control" id="crfValue" value="23">
                     </div>
                 </div>
-
                 <button type="button" class="btn btn-success w-100" onclick="startConvert()">変換開始</button>
             </form>
-
             <div id="convertStatus" class="status-box">
-                <strong>Status:</strong> <span id="c-status">Idle</span>
-                <div id="convertSpinner" class="spinner-border spinner-border-sm text-success d-none" role="status"></div>
+                <strong>Status:</strong> <span id="c-status">Idle</span><br>
+                <strong>ETA:</strong> <span id="c-eta" class="text-danger">-</span>
+                <div class="progress mt-2">
+                    <div id="c-progress-bar" class="progress-bar bg-success" role="progressbar" style="width: 0%;">0%</div>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- 3. Download Section -->
     <div class="card shadow-sm">
-        <div class="card-header bg-dark text-white">3. 変換済みファイル ダウンロード</div>
+        <div class="card-header bg-dark text-white">3. 変換済みファイル</div>
         <div class="card-body">
             <div class="list-group" id="convertedList">
                 {% for cfile in converted_files %}
                     <a href="/download/{{ cfile }}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
-                        {{ cfile }}
-                        <span class="badge bg-primary rounded-pill">Download</span>
+                        {{ cfile }} <span class="badge bg-primary">Download</span>
                     </a>
                 {% else %}
-                    <div class="text-muted">変換済みのファイルはまだありません。</div>
+                    <div class="text-muted">なし</div>
                 {% endfor %}
             </div>
+            <button class="btn btn-outline-secondary btn-sm mt-3" onclick="location.reload()">リスト更新</button>
         </div>
     </div>
 </div>
 
 <script>
-    // Magnetダウンロード開始
+    // --- 既存の関数 (startDownload, startConvert) ---
     function startDownload() {
         const magnet = document.getElementById('magnetLink').value;
-        if(!magnet) return alert("Magnetリンクを入力してください");
-
+        if(!magnet) return alert("Magnetリンクを入力");
         fetch('/add_magnet', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            method: 'POST', 
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'}, 
             body: `magnet_link=${encodeURIComponent(magnet)}`
-        }).then(res => res.json()).then(data => {
-            alert(data.message || data.error);
-        });
+        }).then(r=>r.json()).then(d=>alert(d.message||d.error));
     }
 
-    // 変換開始
     function startConvert() {
         const file = document.getElementById('fileSelect').value;
         const preset = document.getElementById('presetSelect').value;
         const crf = document.getElementById('crfValue').value;
-
-        if(!file) return alert("ファイルを選択してください（ページをリロードしてリストを更新）");
-
+        const encoder = document.getElementById('encoderSelect').value;
+        if(!file) return alert("ファイルを選択");
         fetch('/start_convert', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `filename=${encodeURIComponent(file)}&preset=${preset}&crf=${crf}`
-        }).then(res => res.json()).then(data => {
-            console.log(data);
-        });
+            method: 'POST', 
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'}, 
+            body: `filename=${encodeURIComponent(file)}&preset=${preset}&crf=${crf}&encoder=${encoder}`
+        }).then(r=>r.json()).then(d=>console.log(d));
     }
 
-    // ステータスポーリング (1秒ごとに更新)
+    // --- メインポーリング処理 ---
     setInterval(() => {
+        // 1. タスク状態の取得
         fetch('/status').then(res => res.json()).then(data => {
-            // Torrent Status Update
+            // Torrent
             document.getElementById('t-status').innerText = data.torrent.status;
             document.getElementById('t-name').innerText = data.torrent.name || "-";
-            const prog = data.torrent.progress + "%";
-            document.getElementById('t-progress-bar').style.width = prog;
-            document.getElementById('t-progress-bar').innerText = prog;
+            document.getElementById('t-progress-bar').style.width = data.torrent.progress + "%";
+            document.getElementById('t-progress-bar').innerText = data.torrent.progress + "%";
+            // Convert
+            document.getElementById('c-status').innerText = data.convert.status;
+            document.getElementById('c-eta').innerText = data.convert.eta || "-";
+            document.getElementById('c-progress-bar').style.width = data.convert.progress + "%";
+            document.getElementById('c-progress-bar').innerText = data.convert.progress + "%";
+        });
 
-            // Convert Status Update
-            const cStatus = data.convert.status;
-            document.getElementById('c-status').innerText = cStatus;
+        // 2. システム情報の取得 (New)
+        fetch('/system_info').then(res => res.json()).then(sys => {
+            // CPU
+            document.getElementById('cpu-name').innerText = sys.cpu.name || "Unknown CPU";
+            document.getElementById('cpu-val').innerText = `${sys.cpu.percent}% (${sys.cpu.freq}MHz)`;
+            document.getElementById('cpu-bar').style.width = sys.cpu.percent + "%";
             
-            const spinner = document.getElementById('convertSpinner');
-            if(cStatus === 'converting') {
-                spinner.classList.remove('d-none');
+            // Memory
+            document.getElementById('mem-val').innerText = `${sys.memory.used} / ${sys.memory.total} GB`;
+            document.getElementById('mem-bar').style.width = sys.memory.percent + "%";
+            document.getElementById('mem-bar').innerText = sys.memory.percent + "%";
+
+            // GPU
+            const gpuContainer = document.getElementById('gpu-container');
+            if (sys.gpus && sys.gpus.length > 0) {
+                let html = '<hr>';
+                sys.gpus.forEach((gpu, idx) => {
+                    html += `
+                    <div class="mb-2">
+                        <label class="fw-bold sys-text">GPU ${idx+1}: ${gpu.name} <span class="float-end">${gpu.temp}°C / Load: ${gpu.load}%</span></label>
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar bg-danger" role="progressbar" style="width: ${gpu.load}%"></div>
+                        </div>
+                        <small class="text-muted">VRAM: ${gpu.memory_used}MB / ${gpu.memory_total}MB</small>
+                    </div>`;
+                });
+                gpuContainer.innerHTML = html;
             } else {
-                spinner.classList.add('d-none');
-                if(cStatus === 'complete' && data.convert.output) {
-                    // 完了したらリロードを促すか、JSでリストに追加する実装が理想
-                    // ここでは簡易的にステータス表示のみ
-                    document.getElementById('c-status').innerText = "Complete! (ページをリロードしてダウンロード)";
-                }
+                gpuContainer.innerHTML = '<hr><small class="text-muted">No GPU detected or lib not installed.</small>';
             }
         });
-    }, 1000);
+    }, 2000); // 2秒ごとに更新
 </script>
 
 </body>
