@@ -3,103 +3,97 @@ import threading
 import time
 import subprocess
 import libtorrent as lt
+import re
+import psutil  # 追加: システム監視用
+import platform # 追加: CPU情報用
+
+# GPUライブラリの読み込みトライ (GPUがない環境でのエラー防止)
+try:
+    import GPUtil
+    HAS_GPU_LIB = True
+except ImportError:
+    HAS_GPU_LIB = False
+
 from flask import Flask, render_template, request, jsonify, send_from_directory
 
 app = Flask(__name__)
 
-# ディレクトリ設定
+# --- (既存のディレクトリ設定や関数はそのまま) ---
 DOWNLOAD_DIR = 'downloads'
 CONVERT_DIR = 'converted'
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(CONVERT_DIR, exist_ok=True)
 
-# グローバルステータス管理 (簡易的)
 tasks = {
     "torrent": {"status": "idle", "progress": 0, "name": ""},
-    "convert": {"status": "idle", "output": ""}
+    "convert": {"status": "idle", "output": "", "progress": 0, "eta": "-"}
 }
 
-def torrent_download_thread(magnet_link):
-    """バックグラウンドでTorrentをダウンロードする"""
-    tasks["torrent"]["status"] = "starting"
-    tasks["torrent"]["progress"] = 0
-    
-    ses = lt.session()
-    ses.listen_on(6881, 6891)
-    
-    params = lt.parse_magnet_uri(magnet_link)
-    params.save_path = DOWNLOAD_DIR
-    
-    handle = ses.add_torrent(params)
-    tasks["torrent"]["name"] = handle.name()
-    
-    print(f"Downloading Metadata for {magnet_link}...")
-    while not handle.has_metadata():
-        time.sleep(1)
-    
-    tasks["torrent"]["name"] = handle.name()
-    print(f"Metadata received. Name: {handle.name()}")
-    
-    while handle.status().state != lt.torrent_status.seeding:
-        s = handle.status()
-        progress = s.progress * 100
-        tasks["torrent"]["status"] = "downloading"
-        tasks["torrent"]["progress"] = round(progress, 2)
-        tasks["torrent"]["name"] = s.name
-        
-        # 状態確認用ログ
-        # print(f'{s.name}: {progress:.2f}% complete (down: {s.download_rate / 1000:.1f} kB/s)')
-        time.sleep(1)
-        
-    tasks["torrent"]["status"] = "complete"
-    tasks["torrent"]["progress"] = 100
-    print("Download complete")
+# --- (既存の torrent_download_thread, get_video_duration, time_str_to_sec, ffmpeg_convert_thread は変更なし) ---
+# ※省略します。以前のコードをそのまま維持してください。
+# ただし、ffmpeg_convert_thread などは以前のコードが必要です。
 
+# --- 追加: システム情報を取得するAPI ---
+@app.route('/system_info')
+def system_info():
+    # 1. CPU情報
+    cpu_percent = psutil.cpu_percent(interval=None) # 非ブロッキングで取得
+    cpu_freq = psutil.cpu_freq()
+    current_freq = round(cpu_freq.current, 0) if cpu_freq else 0
+    
+    # 2. メモリ情報
+    mem = psutil.virtual_memory()
+    mem_percent = mem.percent
+    mem_used_gb = round(mem.used / (1024**3), 1)
+    mem_total_gb = round(mem.total / (1024**3), 1)
 
-def ffmpeg_convert_thread(filename, preset, crf):
-    """バックグラウンドでFFmpeg変換を実行する"""
-    tasks["convert"]["status"] = "converting"
-    
-    input_path = os.path.join(DOWNLOAD_DIR, filename)
-    output_filename = os.path.splitext(filename)[0] + ".mp4"
-    output_path = os.path.join(CONVERT_DIR, output_filename)
-    
-    # FFmpegコマンド構築
-    # H.264 (libx264), 音声はAAC, 指定されたプリセットとCRFを使用
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', input_path,
-        '-c:v', 'libx264',
-        '-preset', preset,
-        '-crf', str(crf),
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        output_path
-    ]
-    
-    print(f"Running FFmpeg: {' '.join(cmd)}")
-    
-    try:
-        # プロセス実行
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        
-        if process.returncode == 0:
-            tasks["convert"]["status"] = "complete"
-            tasks["convert"]["output"] = output_filename
-        else:
-            tasks["convert"]["status"] = "error"
-            print("FFmpeg Error:", stderr.decode('utf-8'))
-            
-    except Exception as e:
-        tasks["convert"]["status"] = "error"
-        print(f"Conversion Exception: {e}")
+    # 3. GPU情報 (NVIDIAのみ)
+    gpu_list = []
+    if HAS_GPU_LIB:
+        try:
+            gpus = GPUtil.getGPUs()
+            for gpu in gpus:
+                gpu_list.append({
+                    "name": gpu.name,
+                    "load": round(gpu.load * 100, 1),
+                    "memory_used": round(gpu.memoryUsed, 0),
+                    "memory_total": round(gpu.memoryTotal, 0),
+                    "temp": gpu.temperature
+                })
+        except Exception:
+            pass # エラー時は空リスト
+
+    return jsonify({
+        "cpu": {
+            "name": platform.processor(),
+            "percent": cpu_percent,
+            "freq": current_freq
+        },
+        "memory": {
+            "percent": mem_percent,
+            "used": mem_used_gb,
+            "total": mem_total_gb
+        },
+        "gpus": gpu_list
+    })
+
+# --- (既存のルート定義) ---
+# get_recursive_files関数、indexルート、add_magnet, start_convert, status, download_file などは
+# 以前のコードをそのまま使ってください。
+
+def get_recursive_files(directory):
+    file_list = []
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            if not file.startswith('.'):
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, directory)
+                file_list.append(rel_path)
+    return sorted(file_list)
 
 @app.route('/')
 def index():
-    # ダウンロード済みフォルダ内のファイルリストを取得
-    files = [f for f in os.listdir(DOWNLOAD_DIR) if os.path.isfile(os.path.join(DOWNLOAD_DIR, f))]
-    # 変換済みフォルダ内のファイルリスト
+    files = get_recursive_files(DOWNLOAD_DIR)
     converted_files = [f for f in os.listdir(CONVERT_DIR) if os.path.isfile(os.path.join(CONVERT_DIR, f))]
     return render_template('index.html', files=files, converted_files=converted_files)
 
@@ -107,7 +101,6 @@ def index():
 def add_magnet():
     magnet = request.form.get('magnet_link')
     if magnet:
-        # スレッドでダウンロード開始
         thread = threading.Thread(target=torrent_download_thread, args=(magnet,))
         thread.start()
         return jsonify({"message": "Download started"}), 200
@@ -116,12 +109,12 @@ def add_magnet():
 @app.route('/start_convert', methods=['POST'])
 def start_convert():
     filename = request.form.get('filename')
-    preset = request.form.get('preset') # veryslow, medium, ultrafast etc.
-    crf = request.form.get('crf', 23)   # 画質設定 (デフォルト23)
-    
+    preset = request.form.get('preset')
+    crf = request.form.get('crf', 23)
+    encoder = request.form.get('encoder', 'libx264')
     if filename and preset:
-        # スレッドで変換開始
-        thread = threading.Thread(target=ffmpeg_convert_thread, args=(filename, preset, crf))
+        # ここでは ffmpeg_convert_thread が定義されている前提
+        thread = threading.Thread(target=ffmpeg_convert_thread, args=(filename, preset, crf, encoder))
         thread.start()
         return jsonify({"message": "Conversion started"}), 200
     return jsonify({"error": "Invalid parameters"}), 400
@@ -133,6 +126,17 @@ def status():
 @app.route('/download/<path:filename>')
 def download_file(filename):
     return send_from_directory(CONVERT_DIR, filename, as_attachment=True)
+
+# --- 以下略 (torrent_download_thread, ffmpeg_convert_thread の定義を忘れずに) ---
+# ※省略されていますが、以前のステップで作成した関数を必ずここに含めてください。
+
+def torrent_download_thread(magnet_link):
+    # (省略: 以前のコードを使用)
+    pass 
+
+def ffmpeg_convert_thread(rel_path, preset, crf, encoder):
+    # (省略: 以前のコードを使用)
+    pass
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
